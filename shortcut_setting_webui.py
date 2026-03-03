@@ -94,7 +94,17 @@ def load_config() -> List[Shortcut]:
 
 
 def save_config(shortcuts: List[Shortcut]) -> None:
-    data = {"shortcuts": [asdict(s) for s in shortcuts]}
+    # 保存時に hotkey を正規化しておく（揺れ防止）
+    normalized = []
+    for s in shortcuts:
+        ss = Shortcut(**asdict(s))
+        ss.hotkey = _normalize_hotkey(ss.hotkey)
+        ss.title = (ss.title or "").strip() or (ss.hotkey or "Unnamed")
+        ss.action_type = (ss.action_type or "run_cmd").strip()
+        ss.value = (ss.value or "").strip()
+        normalized.append(ss)
+
+    data = {"shortcuts": [asdict(s) for s in normalized]}
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
@@ -122,7 +132,6 @@ def execute(sc: Shortcut) -> None:
 # 常駐監視スレッド（安全解除）
 # ===============================
 def listener_loop(shortcuts: List[Shortcut], stop_event: threading.Event, status: Dict[str, str]) -> None:
-    # 環境によって unhook_all_hotkeys が例外になるので守る
     try:
         keyboard.unhook_all_hotkeys()
     except Exception:
@@ -179,7 +188,6 @@ def ensure_state() -> None:
     if "listener_status" not in st.session_state:
         st.session_state.listener_status = {"state": "stopped", "msg": "停止中"}
 
-    # 自動更新用（古いStreamlit向け）
     if "ui_last_tick" not in st.session_state:
         st.session_state.ui_last_tick = 0.0
 
@@ -193,7 +201,12 @@ def start_listener_from_saved_config() -> None:
     if listener_running():
         return
 
+    # ★ まず今のUI状態を JSON に保存してから起動
+    save_config(st.session_state.shortcuts)
+
+    # ★ その保存内容を読み直して起動（確実に「保存済み設定」で起動）
     shortcuts = load_config()
+
     st.session_state.stop_event = threading.Event()
     st.session_state.listener_thread = threading.Thread(
         target=listener_loop,
@@ -209,19 +222,93 @@ def stop_listener() -> None:
         time.sleep(0.2)
 
 
-# ===============================
-# 古いStreamlit向け 自動更新（擬似オートリフレッシュ）
-# ===============================
 def soft_autorefresh(interval_sec: float = 0.5) -> None:
-    """
-    追加インストールなしで、一定間隔ごとに st.rerun() する。
-    ただし負荷を避けるため、監視が動いている時だけ回すのが基本。
-    """
     now = time.time()
     if now - st.session_state.ui_last_tick >= interval_sec:
         st.session_state.ui_last_tick = now
-        # 次の実行で状態が反映される
         st.rerun()
+
+
+# ===============================
+# UI: CSS（雰囲気を一気に変える）
+# ===============================
+def inject_css() -> None:
+    st.markdown(
+        """
+<style>
+/* 全体 */
+.block-container { padding-top: 1.2rem; padding-bottom: 2.2rem; }
+h1, h2, h3 { letter-spacing: -0.02em; }
+
+/* ヘッダーカード */
+.hero {
+  padding: 18px 18px;
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(70,140,255,0.14), rgba(170,90,255,0.10));
+  border: 1px solid rgba(255,255,255,0.10);
+  margin-bottom: 14px;
+}
+.hero-title { font-size: 28px; font-weight: 800; margin: 0; }
+.hero-sub { margin: 6px 0 0 0; opacity: 0.75; }
+
+/* カード */
+.card {
+  padding: 14px 14px;
+  border-radius: 16px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.10);
+  box-shadow: 0 10px 30px rgba(0,0,0,0.10);
+}
+
+/* バッジ */
+.badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  opacity: 0.92;
+  border: 1px solid rgba(255,255,255,0.16);
+}
+.badge-blue { background: rgba(60,130,255,0.20); }
+.badge-green { background: rgba(30,200,120,0.18); }
+.badge-amber { background: rgba(255,190,60,0.20); }
+.badge-gray { background: rgba(160,160,160,0.16); }
+
+.kv { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+.kv .k { opacity: 0.7; font-size: 12px; }
+.kv .v { font-weight: 700; }
+
+/* Streamlitの部品を少し丸く */
+div[data-testid="stTextInput"] input,
+div[data-testid="stSelectbox"] div,
+div[data-testid="stTextArea"] textarea {
+  border-radius: 12px !important;
+}
+
+/* ボタンを“それっぽく” */
+div.stButton > button {
+  border-radius: 12px !important;
+  padding: 0.55rem 0.85rem !important;
+  border: 1px solid rgba(255,255,255,0.14) !important;
+}
+</style>
+""",
+        unsafe_allow_html=True,
+    )
+
+
+def badge_action(action_type: str) -> str:
+    if action_type == "open_url":
+        return '<span class="badge badge-blue">OPEN URL</span>'
+    return '<span class="badge badge-gray">RUN CMD</span>'
+
+
+def badge_state(state: str) -> str:
+    if state == "running":
+        return '<span class="badge badge-green">RUNNING</span>'
+    if state == "warning":
+        return '<span class="badge badge-amber">WARNING</span>'
+    return '<span class="badge badge-gray">STOPPED</span>'
 
 
 # ===============================
@@ -229,9 +316,23 @@ def soft_autorefresh(interval_sec: float = 0.5) -> None:
 # ===============================
 st.set_page_config(page_title="OpenShortcutKeyWebUI", layout="wide")
 ensure_state()
+inject_css()
 
-st.title("ショートカット設定 WebUI（統合版 / 安定版）")
-st.caption("設定(UI)と常駐監視(実行)を同じPythonプロセスで動かします。保存と監視は分離。")
+state = st.session_state.listener_status.get("state", "stopped")
+msg = st.session_state.listener_status.get("msg", "停止中")
+
+st.markdown(
+    f"""
+<div class="hero">
+  <div class="kv">
+    <div class="hero-title">OpenShortcutKeyWebUI</div>
+    {badge_state(state)}
+  </div>
+  <p class="hero-sub">設定(UI)と常駐監視(実行)を同じPythonプロセスで動作。保存と監視は分離して安定化。</p>
+</div>
+""",
+    unsafe_allow_html=True,
+)
 
 left, right = st.columns([1.25, 1])
 
@@ -239,10 +340,23 @@ left, right = st.columns([1.25, 1])
 # 左: 編集・追加・保存
 # -------------------------------
 with left:
-    st.subheader("① ショートカット一覧（編集）")
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("ショートカット（編集）")
+    st.caption("ホットキーは `ctrl+alt+f1` のように指定できます。")
 
     for sc in list(st.session_state.shortcuts):
-        with st.expander(f"{sc.title}  ({sc.hotkey})", expanded=True):
+        label = f"{sc.title}  •  {sc.hotkey}  •  {sc.action_type}"
+        with st.expander(label, expanded=False):
+            st.markdown(
+                f"""
+<div class="kv">
+  <span class="badge badge-gray">{sc.hotkey or 'no-hotkey'}</span>
+  {badge_action(sc.action_type)}
+</div>
+""",
+                unsafe_allow_html=True,
+            )
+
             sc.title = st.text_input("タイトル", sc.title, key=f"title_{sc.id}")
 
             sc.hotkey = st.text_input(
@@ -252,6 +366,7 @@ with left:
             )
             sc.hotkey = _normalize_hotkey(sc.hotkey)
 
+            # 動作タイプ
             sc.action_type = st.selectbox(
                 "動作タイプ",
                 ["open_url", "run_cmd"],
@@ -260,68 +375,116 @@ with left:
                 help="open_url: ChromeでURLを開く / run_cmd: コマンド実行",
             )
 
-            sc.value = st.text_input(
-                "URL または コマンド",
-                sc.value,
-                key=f"value_{sc.id}",
-                help='例(URL): https://chat.openai.com / 例(コマンド): notepad',
-            )
-
-            if st.button("この項目を削除", key=f"del_{sc.id}"):
-                st.session_state.shortcuts = [x for x in st.session_state.shortcuts if x.id != sc.id]
-                st.rerun()
-
-    st.divider()
-
-    st.subheader("② 追加")
-    with st.form("add_form", clear_on_submit=True):
-        title = st.text_input("タイトル", "New Shortcut")
-        hotkey = st.text_input("ホットキー（例: f13 / ctrl+alt+f1）", "f14")
-        action_type = st.selectbox("動作タイプ", ["open_url", "run_cmd"])
-        value = st.text_input("URL または コマンド", "https://chat.openai.com")
-        ok = st.form_submit_button("追加する")
-
-        if ok:
-            st.session_state.shortcuts.append(
-                Shortcut(
-                    id=new_id(),
-                    title=title.strip() or "Untitled",
-                    hotkey=_normalize_hotkey(hotkey),
-                    action_type=action_type,
-                    value=value.strip(),
+            # ★ run_cmd の場合は URL 入力を出さない / open_url の場合は URL を出す
+            if sc.action_type == "open_url":
+                sc.value = st.text_input(
+                    "URL",
+                    sc.value,
+                    key=f"value_url_{sc.id}",
+                    help="例: https://chat.openai.com",
                 )
-            )
-            st.rerun()
+            else:
+                sc.value = st.text_input(
+                    "コマンド",
+                    sc.value,
+                    key=f"value_cmd_{sc.id}",
+                    help='例: notepad / "C:\\\\path\\\\app.exe" --arg',
+                )
+
+            # 削除
+            del_col, _ = st.columns([1, 3])
+            with del_col:
+                if st.button("削除", key=f"del_{sc.id}", type="secondary"):
+                    st.session_state.shortcuts = [x for x in st.session_state.shortcuts if x.id != sc.id]
+                    st.rerun()
 
     st.divider()
 
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        if st.button("設定を保存（変更を確定）"):
+st.subheader("追加")
+
+# 追加用の入力状態（初回だけ初期化）
+if "add_title" not in st.session_state:
+    st.session_state.add_title = "New Shortcut"
+if "add_hotkey" not in st.session_state:
+    st.session_state.add_hotkey = "f14"
+if "add_action_type" not in st.session_state:
+    st.session_state.add_action_type = "open_url"
+if "add_value_url" not in st.session_state:
+    st.session_state.add_value_url = "https://chat.openai.com"
+if "add_value_cmd" not in st.session_state:
+    st.session_state.add_value_cmd = ""
+
+c1, c2 = st.columns([1.2, 1])
+with c1:
+    st.session_state.add_title = st.text_input("タイトル", st.session_state.add_title)
+    st.session_state.add_hotkey = st.text_input("ホットキー", st.session_state.add_hotkey)
+with c2:
+    st.session_state.add_action_type = st.selectbox(
+        "動作タイプ",
+        ["open_url", "run_cmd"],
+        index=0 if st.session_state.add_action_type == "open_url" else 1,
+    )
+
+# ★ここがポイント：動作タイプに応じて入力欄を切り替える（即時反映）
+if st.session_state.add_action_type == "open_url":
+    st.session_state.add_value_url = st.text_input("URL", st.session_state.add_value_url)
+else:
+    st.session_state.add_value_cmd = st.text_input(
+        "コマンド",
+        st.session_state.add_value_cmd,
+        help='例: notepad / "C:\\\\path\\\\app.exe" --arg',
+    )
+
+# 追加ボタン
+if st.button("追加する"):
+    action_type = st.session_state.add_action_type
+    value = (st.session_state.add_value_url if action_type == "open_url" else st.session_state.add_value_cmd).strip()
+
+    st.session_state.shortcuts.append(
+        Shortcut(
+            id=new_id(),
+            title=(st.session_state.add_title.strip() or "Untitled"),
+            hotkey=_normalize_hotkey(st.session_state.add_hotkey),
+            action_type=action_type,
+            value=value,
+        )
+    )
+
+    # 追加後に入力欄をリセット（フォームの clear_on_submit 相当）
+    st.session_state.add_title = "New Shortcut"
+    st.session_state.add_hotkey = "f14"
+    st.session_state.add_action_type = "open_url"
+    st.session_state.add_value_url = "https://chat.openai.com"
+    st.session_state.add_value_cmd = ""
+
+    st.rerun()
+
+    st.divider()
+
+    a1, a2, a3 = st.columns(3)
+    with a1:
+        if st.button("保存", type="primary"):
             save_config(st.session_state.shortcuts)
             st.success(f"保存しました: {CONFIG_PATH}")
-
-    with c2:
-        if st.button("初期状態に戻す"):
+    with a2:
+        if st.button("初期化", type="secondary"):
             st.session_state.shortcuts = [Shortcut(**asdict(s)) for s in DEFAULT_SHORTCUTS]
             save_config(st.session_state.shortcuts)
-            st.success("初期状態に戻しました")
+            st.info("初期状態に戻しました")
             st.rerun()
-
-    with c3:
-        if st.button("テスト: ChatGPTを開く（即時実行）"):
+    with a3:
+        if st.button("テスト実行", type="secondary"):
             open_url_in_chrome("https://chat.openai.com")
-            st.info("ChromeでChatGPTを開きました（即時実行）")
+            st.toast("ChromeでChatGPTを開きました", icon="✅")
 
+    st.markdown("</div>", unsafe_allow_html=True)
 
 # -------------------------------
 # 右: 監視開始/停止 + 状態表示
 # -------------------------------
 with right:
-    st.subheader("③ 常駐監視（ホットキーを受けて実行）")
-
-    state = st.session_state.listener_status.get("state", "stopped")
-    msg = st.session_state.listener_status.get("msg", "停止中")
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.subheader("常駐監視")
 
     if state == "running":
         st.success(msg)
@@ -330,35 +493,32 @@ with right:
     else:
         st.info(msg)
 
-    st.write(
-        "注意: `f13` は物理キーボードに無いことが多いので、"
-        "今は `ctrl+alt+f1` などでも動作確認できます。"
-    )
+    st.caption("Fn はOSに届かないことが多いので、動作確認は `ctrl+alt+f1` など推奨。")
 
     b1, b2 = st.columns(2)
     with b1:
-        if st.button("監視を開始（保存済み設定で起動）"):
+        if st.button("監視を開始（保存済み）", type="primary"):
             start_listener_from_saved_config()
-            st.success("監視を開始しました（保存済み設定を使用）")
+            st.toast("監視を開始しました", icon="🟢")
             st.rerun()
 
     with b2:
-        if st.button("監視を停止"):
+        if st.button("監視を停止", type="secondary"):
             stop_listener()
-            st.success("監視を停止しました")
+            st.toast("監視を停止しました", icon="🛑")
             st.rerun()
 
     st.divider()
-    st.subheader("トラブル時のポイント")
+    st.subheader("トラブルシュート")
     st.markdown(
         """
-- **ホットキーが反応しない**: Windowsなら Streamlit を **管理者** で実行してみてください。
-- **Fn+F1が取れない**: Fn は多くのキーボードで OS に届きません。`ctrl+alt+f1` などでテスト推奨。
-- **Chromeが起動しない**: `run_cmd` にして Chrome のフルパスで起動してください。
+- **反応しない**: Windowsなら Streamlit を **管理者** で実行。
+- **Fn+F1が取れない**: Fn は多くのキーボードで OS に届きません（`ctrl+alt+f1` でテスト）。
+- **Chromeが起動しない**: `run_cmd` にして Chrome のフルパス指定。
   - 例: `"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" https://chat.openai.com`
-"""
+""".strip()
     )
+    st.markdown("</div>", unsafe_allow_html=True)
 
-# ★ 監視中だけ、UIを定期更新してステータスが追従するようにする（追加インストール不要）
 if listener_running():
     soft_autorefresh(interval_sec=0.5)
