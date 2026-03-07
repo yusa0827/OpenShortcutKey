@@ -34,10 +34,17 @@ DEFAULT_SHORTCUTS: List[Shortcut] = [
     Shortcut(
         id=new_id(),
         title="Open ChatGPT",
-        hotkey="f13",
+        hotkey="ctrl+f1",
         action_type="open_url",
         value="https://chat.openai.com",
-    )
+    ),
+    Shortcut(
+        id=new_id(),
+        title="Open CMD",
+        hotkey="ctrl+f2",
+        action_type="open_cmd",
+        value="",
+    ),
 ]
 
 ACTION_TYPES = ["open_url", "run_cmd", "open_cmd"]
@@ -107,7 +114,8 @@ def load_config() -> List[Shortcut]:
 
 
 def save_config(shortcuts: List[Shortcut]) -> None:
-    # 保存時に揺れを正規化しておく
+    os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+
     normalized: List[Shortcut] = []
     for s in shortcuts:
         ss = Shortcut(**asdict(s))
@@ -134,7 +142,6 @@ def open_url_in_chrome(url: str) -> None:
 
 
 def run_command(cmd: str) -> None:
-    # 新しいコンソールウィンドウで実行
     subprocess.Popen(
         f'cmd.exe /c start "" {cmd}',
         shell=True,
@@ -142,11 +149,11 @@ def run_command(cmd: str) -> None:
 
 
 def open_cmd_window() -> None:
-    # ★必ず新しいコンソールを作って cmd を開く（開いたまま）
     subprocess.Popen(
         ["cmd.exe", "/k"],
         creationflags=subprocess.CREATE_NEW_CONSOLE,
     )
+
 
 def execute(sc: Shortcut) -> None:
     print(f"[EXEC] {sc.title} | {sc.hotkey} | {sc.action_type} | {sc.value}")
@@ -160,7 +167,7 @@ def execute(sc: Shortcut) -> None:
 
 
 # ===============================
-# 常駐監視スレッド（安全解除）
+# 常駐監視スレッド（keyboard版）
 # ===============================
 def listener_loop(shortcuts: List[Shortcut], stop_event: threading.Event, status: Dict[str, str]) -> None:
     try:
@@ -222,11 +229,10 @@ def ensure_state() -> None:
     if "ui_last_tick" not in st.session_state:
         st.session_state.ui_last_tick = 0.0
 
-    # 追加用の入力状態（初回だけ初期化）
     if "add_title" not in st.session_state:
         st.session_state.add_title = "New Shortcut"
     if "add_hotkey" not in st.session_state:
-        st.session_state.add_hotkey = "f14"
+        st.session_state.add_hotkey = "ctrl+f2"
     if "add_action_type" not in st.session_state:
         st.session_state.add_action_type = "open_url"
     if "add_value_url" not in st.session_state:
@@ -244,10 +250,7 @@ def start_listener_from_saved_config() -> None:
     if listener_running():
         return
 
-    # まず今のUI状態を JSON に保存してから起動
     save_config(st.session_state.shortcuts)
-
-    # その保存内容を読み直して起動（確実に「保存済み設定」で起動）
     shortcuts = load_config()
 
     st.session_state.stop_event = threading.Event()
@@ -273,17 +276,15 @@ def soft_autorefresh(interval_sec: float = 0.5) -> None:
 
 
 # ===============================
-# UI: CSS（雰囲気を一気に変える）
+# UI: CSS
 # ===============================
 def inject_css() -> None:
     st.markdown(
         """
 <style>
-/* 全体 */
 .block-container { padding-top: 1.2rem; padding-bottom: 2.2rem; }
 h1, h2, h3 { letter-spacing: -0.02em; }
 
-/* ヘッダーカード */
 .hero {
   padding: 18px 18px;
   border-radius: 18px;
@@ -294,7 +295,6 @@ h1, h2, h3 { letter-spacing: -0.02em; }
 .hero-title { font-size: 28px; font-weight: 800; margin: 0; }
 .hero-sub { margin: 6px 0 0 0; opacity: 0.75; }
 
-/* カード */
 .card {
   padding: 14px 14px;
   border-radius: 16px;
@@ -303,7 +303,6 @@ h1, h2, h3 { letter-spacing: -0.02em; }
   box-shadow: 0 10px 30px rgba(0,0,0,0.10);
 }
 
-/* バッジ */
 .badge {
   display: inline-block;
   padding: 3px 10px;
@@ -321,14 +320,12 @@ h1, h2, h3 { letter-spacing: -0.02em; }
 .kv .k { opacity: 0.7; font-size: 12px; }
 .kv .v { font-weight: 700; }
 
-/* Streamlitの部品を少し丸く */
 div[data-testid="stTextInput"] input,
 div[data-testid="stSelectbox"] div,
 div[data-testid="stTextArea"] textarea {
   border-radius: 12px !important;
 }
 
-/* ボタンを“それっぽく” */
 div.stButton > button {
   border-radius: 12px !important;
   padding: 0.55rem 0.85rem !important;
@@ -373,7 +370,7 @@ st.markdown(
     <div class="hero-title">OpenShortcutKeyWebUI</div>
     {badge_state(state)}
   </div>
-  <p class="hero-sub">設定(UI)と常駐監視(実行)を同じPythonプロセスで動作。保存と監視は分離して安定化。</p>
+  <p class="hero-sub">Ctrl+F1 / Ctrl+F2 などのホットキーを編集・保存・監視できます。</p>
 </div>
 """,
     unsafe_allow_html=True,
@@ -387,7 +384,7 @@ left, right = st.columns([1.25, 1])
 with left:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.subheader("ショートカット（編集）")
-    st.caption("ホットキーは `ctrl+alt+f1` のように指定できます。")
+    st.caption("ホットキーは `ctrl+f1` や `ctrl+shift+f2` のように指定できます。")
 
     for sc in list(st.session_state.shortcuts):
         label = f"{sc.title}  •  {sc.hotkey}  •  {sc.action_type}"
@@ -405,7 +402,7 @@ with left:
             sc.title = st.text_input("タイトル", sc.title, key=f"title_{sc.id}")
 
             sc.hotkey = st.text_input(
-                "ホットキー（例: f13 / ctrl+alt+f1）",
+                "ホットキー（例: ctrl+f1 / ctrl+shift+f2）",
                 sc.hotkey,
                 key=f"hotkey_{sc.id}",
             )
@@ -491,9 +488,8 @@ with left:
             )
         )
 
-        # 追加後に入力欄をリセット
         st.session_state.add_title = "New Shortcut"
-        st.session_state.add_hotkey = "f14"
+        st.session_state.add_hotkey = "ctrl+f2"
         st.session_state.add_action_type = "open_url"
         st.session_state.add_value_url = "https://chat.openai.com"
         st.session_state.add_value_cmd = ""
@@ -534,7 +530,7 @@ with right:
     else:
         st.info(msg)
 
-    st.caption("Fn はOSに届かないことが多いので、動作確認は `ctrl+alt+f1` など推奨。")
+    st.caption("おすすめは `ctrl+f1`, `ctrl+f2`, `ctrl+shift+f1` などです。")
 
     b1, b2 = st.columns(2)
     with b1:
@@ -553,11 +549,12 @@ with right:
     st.subheader("トラブルシュート")
     st.markdown(
         """
-- **反応しない**: Windowsなら Streamlit を **管理者** で実行。
-- **Fn+F1が取れない**: Fn は多くのキーボードで OS に届きません（`ctrl+alt+f1` でテスト）。
-- **Chromeが起動しない**: `run_cmd` にして Chrome のフルパス指定。
+- **反応しない**: Windowsなら Streamlit を **管理者権限** で実行して確認
+- **既存ショートカットと衝突**: `ctrl+shift+f1` や `ctrl+alt+f2` を試す
+- **Chromeが起動しない**: `run_cmd` にして Chrome のフルパス指定
   - 例: `"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" https://chat.openai.com`
 - **cmd を開く**: 動作タイプ `open_cmd` を選択（value不要）
+- **より安定させたい**: 監視は `keyboard` 版より、あなたの `RegisterHotKey` 版 listener.py の方が向いています
 """.strip()
     )
     st.markdown("</div>", unsafe_allow_html=True)

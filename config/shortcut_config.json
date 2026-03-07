@@ -1,18 +1,32 @@
 {
   "shortcuts": [
     {
-      "id": "1eff43f4d0344848b18b64ba92d65d0f",
-      "title": "open_chatgpt",
-      "hotkey": "f13",
+      "id": "1",
+      "title": "Open ChatGPT",
+      "hotkey": "ctrl+f1",
       "action_type": "open_url",
       "value": "https://chat.openai.com"
     },
     {
-      "id": "27ccf069c8924ce98881d63fc252ea2c",
-      "title": "cmd.exe",
-      "hotkey": "f14",
-      "action_type": "open_cmd",
-      "value": ""
+      "id": "2",
+      "title": "Open CMD",
+      "hotkey": "ctrl+f2",
+      "action_type": "run_cmd",
+      "value": "start cmd.exe"
+    },
+    {
+      "id": "3",
+      "title": "Open Notepad",
+      "hotkey": "ctrl+f3",
+      "action_type": "run_cmd",
+      "value": "notepad.exe"
+    },
+    {
+      "id": "4",
+      "title": "Open Explorer",
+      "hotkey": "ctrl+f4",
+      "action_type": "run_cmd",
+      "value": "explorer.exe"
     }
   ]
 }

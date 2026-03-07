@@ -1,5 +1,7 @@
 # listener.py (Windows API版: RegisterHotKey + WM_HOTKEY)
 # -*- coding: utf-8 -*-
+from __future__ import annotations
+
 import ctypes
 from ctypes import wintypes
 import json
@@ -18,19 +20,19 @@ DEBOUNCE_SEC = 0.30       # 同一hotkeyの連打抑止（秒）
 # Windows constants
 WM_HOTKEY = 0x0312
 
-MOD_ALT     = 0x0001
-MOD_CONTROL = 0x0002
-MOD_SHIFT   = 0x0004
-MOD_WIN     = 0x0008
-MOD_NOREPEAT = 0x4000  # Win7以降: キー押しっぱなしのリピート抑制（効く環境なら効く）
+MOD_ALT      = 0x0001
+MOD_CONTROL  = 0x0002
+MOD_SHIFT    = 0x0004
+MOD_WIN      = 0x0008
+MOD_NOREPEAT = 0x4000  # 押しっぱなし時の繰り返し抑止
 
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
 
 
 def open_url(url: str) -> None:
-    # 既存コード踏襲（chrome起動）
-    subprocess.Popen(f'start chrome "{url}"', shell=True)
+    # 既定ブラウザで開く
+    subprocess.Popen(f'start "" "{url}"', shell=True)
 
 
 def run_cmd(cmd: str) -> None:
@@ -44,7 +46,7 @@ def execute(sc: dict) -> None:
     value = sc.get("value", "")
     print(f"[EXEC] {title} | {hotkey} | {action_type} | {value}")
 
-    # トリガーが走った証拠（Windows標準音）
+    # トリガー確認用
     try:
         import winsound
         winsound.MessageBeep()
@@ -93,7 +95,7 @@ def vk_from_key_name(key: str) -> int:
     """
     key = key.lower().strip()
 
-    # Fx
+    # F1-F24
     if key.startswith("f") and key[1:].isdigit():
         n = int(key[1:])
         if 1 <= n <= 24:
@@ -107,7 +109,6 @@ def vk_from_key_name(key: str) -> int:
     if len(key) == 1 and "0" <= key <= "9":
         return ord(key)
 
-    # 少しだけ特殊キー
     special = {
         "tab": 0x09,
         "enter": 0x0D,
@@ -133,17 +134,19 @@ def vk_from_key_name(key: str) -> int:
     if key in special:
         return special[key]
 
-    raise ValueError(f"Unsupported key: {key!r} (try f1-f24, a-z, 0-9, tab/enter/esc/space etc.)")
+    raise ValueError(
+        f"Unsupported key: {key!r} "
+        f"(try ctrl+f1, ctrl+f2, a-z, 0-9, tab/enter/esc/space etc.)"
+    )
 
 
 def parse_hotkey(hotkey: str) -> tuple[int, int]:
     """
-    returns: (modifiers, vk)
-    hotkey examples:
-      - "f13"
-      - "ctrl+f13"
-      - "ctrl+alt+f13"
-      - "win+shift+f13"
+    examples:
+      - "ctrl+f1"
+      - "ctrl+f2"
+      - "ctrl+alt+f3"
+      - "win+shift+f4"
     """
     parts = [p.strip().lower() for p in hotkey.split("+") if p.strip()]
     if not parts:
@@ -155,9 +158,9 @@ def parse_hotkey(hotkey: str) -> tuple[int, int]:
     for p in parts:
         if p in ("ctrl", "control"):
             mods |= MOD_CONTROL
-        elif p in ("alt",):
+        elif p == "alt":
             mods |= MOD_ALT
-        elif p in ("shift",):
+        elif p == "shift":
             mods |= MOD_SHIFT
         elif p in ("win", "windows", "meta"):
             mods |= MOD_WIN
@@ -172,7 +175,7 @@ def parse_hotkey(hotkey: str) -> tuple[int, int]:
 
     vk = vk_from_key_name(key_part)
 
-    # 押しっぱなしリピート抑制（効く環境なら効く）
+    # 押しっぱなしによる連続発火抑止
     mods |= MOD_NOREPEAT
 
     return mods, vk
