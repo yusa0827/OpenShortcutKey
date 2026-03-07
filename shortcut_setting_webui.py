@@ -14,7 +14,6 @@ import keyboard
 
 CONFIG_PATH = "shortcut_config.json"
 
-
 # ===============================
 # データ構造
 # ===============================
@@ -23,7 +22,7 @@ class Shortcut:
     id: str
     title: str
     hotkey: str
-    action_type: str  # "open_url" / "run_cmd"
+    action_type: str  # "open_url" / "run_cmd" / "open_cmd"
     value: str
 
 
@@ -41,6 +40,8 @@ DEFAULT_SHORTCUTS: List[Shortcut] = [
     )
 ]
 
+ACTION_TYPES = ["open_url", "run_cmd", "open_cmd"]
+
 
 # ===============================
 # 設定 I/O（旧互換あり）
@@ -49,11 +50,19 @@ def _normalize_hotkey(hk: str) -> str:
     return (hk or "").strip().lower()
 
 
+def _normalize_action_type(at: str) -> str:
+    at = (at or "").strip()
+    if at not in ACTION_TYPES:
+        return "run_cmd"
+    return at
+
+
 def load_config() -> List[Shortcut]:
     """
     旧フォーマット互換:
       - title が無い → title = hotkey
       - id が無い → 自動生成
+      - action_type 未知 → run_cmd
     """
     if not os.path.exists(CONFIG_PATH):
         save_config(DEFAULT_SHORTCUTS)
@@ -70,12 +79,16 @@ def load_config() -> List[Shortcut]:
     for item in data.get("shortcuts", []):
         sid = item.get("id") or new_id()
         hotkey = _normalize_hotkey(item.get("hotkey", ""))
-        action_type = (item.get("action_type") or "run_cmd").strip()
+        action_type = _normalize_action_type(item.get("action_type") or "run_cmd")
         value = (item.get("value") or "").strip()
 
         title = item.get("title")
         if not title:
             title = hotkey or "Unnamed"
+
+        # open_cmd は value 不要
+        if action_type == "open_cmd":
+            value = ""
 
         shortcuts.append(
             Shortcut(
@@ -94,14 +107,18 @@ def load_config() -> List[Shortcut]:
 
 
 def save_config(shortcuts: List[Shortcut]) -> None:
-    # 保存時に hotkey を正規化しておく（揺れ防止）
-    normalized = []
+    # 保存時に揺れを正規化しておく
+    normalized: List[Shortcut] = []
     for s in shortcuts:
         ss = Shortcut(**asdict(s))
         ss.hotkey = _normalize_hotkey(ss.hotkey)
         ss.title = (ss.title or "").strip() or (ss.hotkey or "Unnamed")
-        ss.action_type = (ss.action_type or "run_cmd").strip()
+        ss.action_type = _normalize_action_type(ss.action_type or "run_cmd")
         ss.value = (ss.value or "").strip()
+
+        if ss.action_type == "open_cmd":
+            ss.value = ""
+
         normalized.append(ss)
 
     data = {"shortcuts": [asdict(s) for s in normalized]}
@@ -117,13 +134,27 @@ def open_url_in_chrome(url: str) -> None:
 
 
 def run_command(cmd: str) -> None:
-    subprocess.Popen(cmd, shell=True)
+    # 新しいコンソールウィンドウで実行
+    subprocess.Popen(
+        f'cmd.exe /c start "" {cmd}',
+        shell=True,
+    )
 
+
+def open_cmd_window() -> None:
+    # ★必ず新しいコンソールを作って cmd を開く（開いたまま）
+    subprocess.Popen(
+        ["cmd.exe", "/k"],
+        creationflags=subprocess.CREATE_NEW_CONSOLE,
+    )
 
 def execute(sc: Shortcut) -> None:
     print(f"[EXEC] {sc.title} | {sc.hotkey} | {sc.action_type} | {sc.value}")
+
     if sc.action_type == "open_url":
         open_url_in_chrome(sc.value)
+    elif sc.action_type == "open_cmd":
+        open_cmd_window()
     else:
         run_command(sc.value)
 
@@ -191,6 +222,18 @@ def ensure_state() -> None:
     if "ui_last_tick" not in st.session_state:
         st.session_state.ui_last_tick = 0.0
 
+    # 追加用の入力状態（初回だけ初期化）
+    if "add_title" not in st.session_state:
+        st.session_state.add_title = "New Shortcut"
+    if "add_hotkey" not in st.session_state:
+        st.session_state.add_hotkey = "f14"
+    if "add_action_type" not in st.session_state:
+        st.session_state.add_action_type = "open_url"
+    if "add_value_url" not in st.session_state:
+        st.session_state.add_value_url = "https://chat.openai.com"
+    if "add_value_cmd" not in st.session_state:
+        st.session_state.add_value_cmd = ""
+
 
 def listener_running() -> bool:
     t = st.session_state.listener_thread
@@ -201,10 +244,10 @@ def start_listener_from_saved_config() -> None:
     if listener_running():
         return
 
-    # ★ まず今のUI状態を JSON に保存してから起動
+    # まず今のUI状態を JSON に保存してから起動
     save_config(st.session_state.shortcuts)
 
-    # ★ その保存内容を読み直して起動（確実に「保存済み設定」で起動）
+    # その保存内容を読み直して起動（確実に「保存済み設定」で起動）
     shortcuts = load_config()
 
     st.session_state.stop_event = threading.Event()
@@ -300,6 +343,8 @@ div.stButton > button {
 def badge_action(action_type: str) -> str:
     if action_type == "open_url":
         return '<span class="badge badge-blue">OPEN URL</span>'
+    if action_type == "open_cmd":
+        return '<span class="badge badge-amber">OPEN CMD</span>'
     return '<span class="badge badge-gray">RUN CMD</span>'
 
 
@@ -366,16 +411,14 @@ with left:
             )
             sc.hotkey = _normalize_hotkey(sc.hotkey)
 
-            # 動作タイプ
             sc.action_type = st.selectbox(
                 "動作タイプ",
-                ["open_url", "run_cmd"],
-                index=0 if sc.action_type == "open_url" else 1,
+                ACTION_TYPES,
+                index=ACTION_TYPES.index(sc.action_type) if sc.action_type in ACTION_TYPES else 1,
                 key=f"type_{sc.id}",
-                help="open_url: ChromeでURLを開く / run_cmd: コマンド実行",
+                help="open_url: ChromeでURL / run_cmd: コマンド実行 / open_cmd: cmd.exe を開く",
             )
 
-            # ★ run_cmd の場合は URL 入力を出さない / open_url の場合は URL を出す
             if sc.action_type == "open_url":
                 sc.value = st.text_input(
                     "URL",
@@ -383,15 +426,17 @@ with left:
                     key=f"value_url_{sc.id}",
                     help="例: https://chat.openai.com",
                 )
-            else:
+            elif sc.action_type == "run_cmd":
                 sc.value = st.text_input(
                     "コマンド",
                     sc.value,
                     key=f"value_cmd_{sc.id}",
                     help='例: notepad / "C:\\\\path\\\\app.exe" --arg',
                 )
+            else:
+                sc.value = ""
+                st.caption("cmd.exe を開きます（入力不要）")
 
-            # 削除
             del_col, _ = st.columns([1, 3])
             with del_col:
                 if st.button("削除", key=f"del_{sc.id}", type="secondary"):
@@ -400,64 +445,60 @@ with left:
 
     st.divider()
 
-st.subheader("追加")
+    st.subheader("追加")
 
-# 追加用の入力状態（初回だけ初期化）
-if "add_title" not in st.session_state:
-    st.session_state.add_title = "New Shortcut"
-if "add_hotkey" not in st.session_state:
-    st.session_state.add_hotkey = "f14"
-if "add_action_type" not in st.session_state:
-    st.session_state.add_action_type = "open_url"
-if "add_value_url" not in st.session_state:
-    st.session_state.add_value_url = "https://chat.openai.com"
-if "add_value_cmd" not in st.session_state:
-    st.session_state.add_value_cmd = ""
-
-c1, c2 = st.columns([1.2, 1])
-with c1:
-    st.session_state.add_title = st.text_input("タイトル", st.session_state.add_title)
-    st.session_state.add_hotkey = st.text_input("ホットキー", st.session_state.add_hotkey)
-with c2:
-    st.session_state.add_action_type = st.selectbox(
-        "動作タイプ",
-        ["open_url", "run_cmd"],
-        index=0 if st.session_state.add_action_type == "open_url" else 1,
-    )
-
-# ★ここがポイント：動作タイプに応じて入力欄を切り替える（即時反映）
-if st.session_state.add_action_type == "open_url":
-    st.session_state.add_value_url = st.text_input("URL", st.session_state.add_value_url)
-else:
-    st.session_state.add_value_cmd = st.text_input(
-        "コマンド",
-        st.session_state.add_value_cmd,
-        help='例: notepad / "C:\\\\path\\\\app.exe" --arg',
-    )
-
-# 追加ボタン
-if st.button("追加する"):
-    action_type = st.session_state.add_action_type
-    value = (st.session_state.add_value_url if action_type == "open_url" else st.session_state.add_value_cmd).strip()
-
-    st.session_state.shortcuts.append(
-        Shortcut(
-            id=new_id(),
-            title=(st.session_state.add_title.strip() or "Untitled"),
-            hotkey=_normalize_hotkey(st.session_state.add_hotkey),
-            action_type=action_type,
-            value=value,
+    c1, c2 = st.columns([1.2, 1])
+    with c1:
+        st.session_state.add_title = st.text_input("タイトル", st.session_state.add_title)
+        st.session_state.add_hotkey = st.text_input("ホットキー", st.session_state.add_hotkey)
+    with c2:
+        st.session_state.add_action_type = st.selectbox(
+            "動作タイプ",
+            ACTION_TYPES,
+            index=ACTION_TYPES.index(st.session_state.add_action_type)
+            if st.session_state.add_action_type in ACTION_TYPES
+            else 0,
         )
-    )
 
-    # 追加後に入力欄をリセット（フォームの clear_on_submit 相当）
-    st.session_state.add_title = "New Shortcut"
-    st.session_state.add_hotkey = "f14"
-    st.session_state.add_action_type = "open_url"
-    st.session_state.add_value_url = "https://chat.openai.com"
-    st.session_state.add_value_cmd = ""
+    if st.session_state.add_action_type == "open_url":
+        st.session_state.add_value_url = st.text_input("URL", st.session_state.add_value_url)
+    elif st.session_state.add_action_type == "run_cmd":
+        st.session_state.add_value_cmd = st.text_input(
+            "コマンド",
+            st.session_state.add_value_cmd,
+            help='例: notepad / "C:\\\\path\\\\app.exe" --arg',
+        )
+    else:
+        st.caption("cmd.exe を開きます（入力不要）")
 
-    st.rerun()
+    if st.button("追加する"):
+        action_type = st.session_state.add_action_type
+
+        if action_type == "open_url":
+            value = st.session_state.add_value_url.strip()
+        elif action_type == "run_cmd":
+            value = st.session_state.add_value_cmd.strip()
+        else:
+            value = ""
+
+        st.session_state.shortcuts.append(
+            Shortcut(
+                id=new_id(),
+                title=(st.session_state.add_title.strip() or "Untitled"),
+                hotkey=_normalize_hotkey(st.session_state.add_hotkey),
+                action_type=action_type,
+                value=value,
+            )
+        )
+
+        # 追加後に入力欄をリセット
+        st.session_state.add_title = "New Shortcut"
+        st.session_state.add_hotkey = "f14"
+        st.session_state.add_action_type = "open_url"
+        st.session_state.add_value_url = "https://chat.openai.com"
+        st.session_state.add_value_cmd = ""
+
+        st.rerun()
 
     st.divider()
 
@@ -516,6 +557,7 @@ with right:
 - **Fn+F1が取れない**: Fn は多くのキーボードで OS に届きません（`ctrl+alt+f1` でテスト）。
 - **Chromeが起動しない**: `run_cmd` にして Chrome のフルパス指定。
   - 例: `"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" https://chat.openai.com`
+- **cmd を開く**: 動作タイプ `open_cmd` を選択（value不要）
 """.strip()
     )
     st.markdown("</div>", unsafe_allow_html=True)
